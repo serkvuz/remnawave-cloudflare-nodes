@@ -49,7 +49,8 @@ class HostManager:
 
         to_disable: List[str] = []
         to_enable: List[str] = []
-        changes: List[dict] = []
+        disable_changes: List[dict] = []
+        enable_changes: List[dict] = []
         current_uuids: Set[str] = set()
 
         for host in hosts:
@@ -86,19 +87,11 @@ class HostManager:
             # State transition
             if desired_enabled:
                 to_enable.append(host_uuid_str)
-                changes.append({
-                    "remark": host.remark,
-                    "address": address,
-                    "action": "enabled",
-                })
+                enable_changes.append({"remark": host.remark, "address": address, "action": "enabled"})
                 self.logger.info(f"Host {host.remark} ({address}) will be enabled")
             else:
                 to_disable.append(host_uuid_str)
-                changes.append({
-                    "remark": host.remark,
-                    "address": address,
-                    "action": "disabled",
-                })
+                disable_changes.append({"remark": host.remark, "address": address, "action": "disabled"})
                 self.logger.info(f"Host {host.remark} ({address}) will be disabled")
 
             self._previous_host_states[host_uuid_str] = desired_enabled
@@ -108,13 +101,15 @@ class HostManager:
         for uuid in stale:
             del self._previous_host_states[uuid]
 
+        successful_changes: List[dict] = []
+
         if to_disable:
             try:
                 await self.client.disable_hosts(to_disable)
                 self.logger.info(f"Bulk disabled {len(to_disable)} hosts")
+                successful_changes.extend(disable_changes)
             except Exception as e:
                 self.logger.error(f"Failed to disable hosts: {e}")
-                # On API error, revert state tracking so next cycle retries
                 for u in to_disable:
                     self._previous_host_states[u] = True
 
@@ -122,17 +117,17 @@ class HostManager:
             try:
                 await self.client.enable_hosts(to_enable)
                 self.logger.info(f"Bulk enabled {len(to_enable)} hosts")
+                successful_changes.extend(enable_changes)
             except Exception as e:
                 self.logger.error(f"Failed to enable hosts: {e}")
                 for u in to_enable:
                     self._previous_host_states[u] = False
 
-        if changes and self.notifier and self.notify_changes:
-            # Group changes by address for richer telegram formatting
+        if successful_changes and self.notifier and self.notify_changes:
             grouped: dict = {}
-            for c in changes:
+            for c in successful_changes:
                 addr = c["address"]
                 if addr not in grouped:
                     grouped[addr] = {"action": c["action"], "remarks": []}
                 grouped[addr]["remarks"].append(c["remark"])
-            self.notifier.notify_host_state_change(HostStateChange(changes=changes, grouped=grouped))
+            self.notifier.notify_host_state_change(HostStateChange(changes=successful_changes, grouped=grouped))

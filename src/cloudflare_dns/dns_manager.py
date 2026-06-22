@@ -69,7 +69,7 @@ class DNSManager:
             else:
                 self.logger.info(f"{full_domain}: {status}")
 
-        return existing_ips | healthy_configured_ips
+        return healthy_configured_ips
 
     async def _add_record(
             self, zone_id: str, full_domain: str, domain: str, zone_name: str, ip: str, ttl: int, proxied: bool
