@@ -7,7 +7,7 @@ from remnawave.models import (
 )
 
 from remnawave import RemnawaveSDK
-from ..utils.logger import get_logger
+from ..utils import get_logger, short_error
 
 import httpx
 
@@ -29,7 +29,7 @@ class RemnawaveClient:
             self.logger.info(f"Successfully fetched {len(nodes_list)} nodes")
             return nodes_list
         except Exception as e:
-            self.logger.error(f"Error fetching nodes: {e}")
+            self.logger.error(f"Error fetching nodes: {short_error(e)}")
             raise
 
     async def get_hosts(self) -> List[HostResponseDto]:
@@ -40,7 +40,7 @@ class RemnawaveClient:
             self.logger.info(f"Successfully fetched {len(hosts_list)} hosts")
             return hosts_list
         except Exception as e:
-            self.logger.error(f"Error fetching hosts: {e}")
+            self.logger.error(f"Error fetching hosts: {short_error(e)}")
             raise
 
     async def _bulk_hosts_action(self, uuids: List[str], action: str) -> List[HostResponseDto]:
@@ -71,7 +71,7 @@ class RemnawaveClient:
                 self.logger.info(f"Successfully {action}d {len(uuids)} hosts")
                 return hosts_list
         except Exception as e:
-            self.logger.error(f"Error {action}ing hosts: {e}")
+            self.logger.error(f"Error {action}ing hosts: {short_error(e)}")
             raise
 
     async def disable_hosts(self, uuids: List[str]) -> List[HostResponseDto]:

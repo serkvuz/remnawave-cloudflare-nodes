@@ -3,7 +3,7 @@ from typing import List
 from remnawave.models import NodeResponseDto
 
 from .client import RemnawaveClient
-from ..utils.logger import get_logger
+from ..utils import get_logger, short_error
 
 
 class NodeStatus:
@@ -45,7 +45,7 @@ class NodeMonitor:
             return node_statuses
 
         except Exception as e:
-            self.logger.error(f"Error checking nodes: {e}")
+            self.logger.error(f"Error checking nodes: {short_error(e)}")
             raise
 
     async def get_healthy_nodes(self) -> List[NodeStatus]:

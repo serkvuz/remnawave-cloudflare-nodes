@@ -9,9 +9,9 @@ from .config import Config
 from .hosts_config import HostsConfig
 from .i18n import get_translator
 from .monitoring_service import MonitoringService
-from .panel import RemnawaveClient, NodeMonitor, HostManager
-from .telegram import TelegramNotifier, ServiceStarted
-from .utils.logger import setup_logger
+from .panel import HostManager, NodeMonitor, RemnawaveClient
+from .telegram import ServiceStarted, TelegramNotifier
+from .utils import setup_logger, short_error
 
 
 class GracefulExit(SystemExit):
@@ -48,7 +48,7 @@ async def run_monitoring_loop(service: MonitoringService, config: Config, logger
             break
         except Exception as e:
             interval = config.check_interval
-            logger.info(f"Retrying in {interval} seconds after error: {e}")
+            logger.info(f"Retrying in {interval} seconds after error: {short_error(e)}")
             await asyncio.sleep(interval)
 
 
@@ -56,7 +56,11 @@ async def main():
     config = Config()
     config.validate()
 
-    logger = setup_logger(name="remnawave-cloudflare-monitor", level=config.log_level, log_file="logs/app.log")
+    logger = setup_logger(
+        name="remnawave-cloudflare-monitor",
+        level=config.log_level,
+        log_file="logs/app.log",
+    )
 
     signal.signal(signal.SIGTERM, raise_graceful_exit)
     signal.signal(signal.SIGINT, raise_graceful_exit)
@@ -80,7 +84,9 @@ async def main():
     logger.info("Starting Remnawave-Cloudflare DNS Monitor")
     logger.info(f"Check interval: {config.check_interval}s")
 
-    remnawave_client = RemnawaveClient(api_url=config.remnawave_url, api_key=config.remnawave_api_key)
+    remnawave_client = RemnawaveClient(
+        api_url=config.remnawave_url, api_key=config.remnawave_api_key
+    )
 
     node_monitor = NodeMonitor(remnawave_client)
 
@@ -136,10 +142,14 @@ async def main():
             from .api import create_app
 
             api_app = create_app(config, notifier, monitoring_service)
-            api_task = asyncio.create_task(run_api_server(api_app, config.api_host, config.api_port))
+            api_task = asyncio.create_task(
+                run_api_server(api_app, config.api_host, config.api_port)
+            )
             logger.info(f"API server listening on {config.api_host}:{config.api_port}")
 
-        await run_monitoring_loop(service=monitoring_service, config=config, logger=logger)
+        await run_monitoring_loop(
+            service=monitoring_service, config=config, logger=logger
+        )
     except (GracefulExit, KeyboardInterrupt):
         logger.info("Shutting down gracefully")
     except Exception as e:

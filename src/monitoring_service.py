@@ -3,8 +3,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set
 from .cloudflare_dns import CloudflareClient, DNSManager
 from .config import Config
 from .panel import HostManager, NodeMonitor
-from .utils.dns import build_fqdn
-from .utils.logger import get_logger
+from .utils import build_fqdn, get_logger, short_error
 
 if TYPE_CHECKING:
     from .telegram import TelegramNotifier
@@ -106,11 +105,12 @@ class MonitoringService:
             self.logger.info("Health check cycle completed")
 
         except Exception as e:
-            self.logger.error(f"Error during health check: {e}", exc_info=True)
+            msg = short_error(e)
+            self.logger.error(f"Error during health check: {msg}")
             if self.notifier and self.config.telegram_notify_errors:
                 from .telegram import HealthCheckError
 
-                self.notifier.notify_health_check_error(HealthCheckError(error_message=str(e)))
+                self.notifier.notify_health_check_error(HealthCheckError(error_message=msg))
             raise
 
     def _get_all_configured_addresses(self) -> Set[str]:
@@ -210,19 +210,16 @@ class MonitoringService:
             delta = 1 if curr_healthy else -1
             online += delta
 
-            node_zone: Optional[ZoneStats] = None
+            zones_stats = []
             for key, znodes in zone_nodes.items():
                 if any(n.address == node.address for n in znodes):
                     zone_online[key] += delta
-                    node_zone = ZoneStats(
+                    zones_stats.append(ZoneStats(
                         name=key,
                         total=len(znodes),
                         online=zone_online[key],
                         offline=len(znodes) - zone_online[key],
-                    )
-                    break
-
-            zones_stats = [node_zone] if node_zone else []
+                    ))
 
             stats = NodeStats(
                 total=total,

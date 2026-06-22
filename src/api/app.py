@@ -162,12 +162,15 @@ def create_app(config: Config, notifier: TelegramNotifier, monitoring_service: "
     @app.delete("/api/config/domains/{domain}/zones/{zone_name}", dependencies=[Depends(auth)])
     async def remove_zone(request: Request, domain: str, zone_name: str):
         ip = _client_ip(request)
-        # Validate before cleanup
-        try:
-            config.remove_zone(domain, zone_name)
-        except ValueError as e:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        # Validate existence without mutating config
+        domain_data = next((d for d in config.domains if d.get("domain") == domain), None)
+        if not domain_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Domain '{domain}' not found")
+        if not any(z.get("name") == zone_name for z in (domain_data.get("zones") or [])):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Zone '{zone_name}' not found for '{domain}'")
+        # Cleanup DNS while config is still intact, then remove from config
         await monitoring_service.cleanup_zone(domain, zone_name)
+        config.remove_zone(domain, zone_name)
         logger.info(f"API: removed zone '{zone_name}' from '{domain}' [from {ip}]")
         notifier.notify_api_zone_removed(ApiZoneRemoved(domain=domain, zone_name=zone_name, client_ip=ip))
         return {"status": "ok"}
