@@ -77,9 +77,14 @@ def action_validate():
     from .utils.dns import build_fqdn
     zones = config.get_all_zones()
     hosts_config = _load_hosts_config()
+    warnings = config.validate_zones()
 
     _print_separator()
     print("  ✓  Config is valid\n")
+    for warning in warnings:
+        print(f"    ⚠  {warning}")
+    if warnings:
+        print()
     print(f"    Check interval : {config.check_interval}s")
     print(f"    Log level      : {config.log_level}")
     print(f"    Domains        : {len(config.domains)}")

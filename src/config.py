@@ -6,7 +6,14 @@ from typing import Any, Dict
 import yaml
 from dotenv import load_dotenv
 
+from .utils.dns import build_fqdn
+
 _API_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
+
+# Cloudflare's "Auto" TTL. Proxied records are always served with Auto TTL and
+# the API rejects an explicit value on them.
+CLOUDFLARE_AUTO_TTL = 1
+DEFAULT_TTL = 120
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
@@ -171,6 +178,10 @@ class Config:
     def telegram_notify_host_changes(self) -> bool:
         return _env_bool("TELEGRAM_NOTIFY_HOST_CHANGES", default=True)
 
+    @property
+    def state_file(self) -> str:
+        return os.getenv("STATE_FILE", "data/state.json")
+
     # --- YAML config ---
 
     @property
@@ -266,6 +277,56 @@ class Config:
                     "Generate one with: openssl rand -hex 32"
                 )
 
+        self.validate_zones()
+
+    def validate_zones(self) -> list:
+        """Check domain/zone structure and return human-readable warnings.
+
+        Structural problems raise: a malformed zone would otherwise only surface
+        as a failed Cloudflare call on every monitoring cycle. Cosmetic
+        normalisations (proxied TTL) are returned as warnings instead.
+        """
+        warnings = []
+        seen_fqdns = set()
+
+        for domain_config in self.domains:
+            if not isinstance(domain_config, dict):
+                raise ValueError(f"Invalid domain entry (expected a mapping): {domain_config!r}")
+
+            domain = domain_config.get("domain")
+            if not domain:
+                raise ValueError("Domain entry is missing a 'domain' value")
+
+            zones = domain_config.get("zones") or []
+            if not zones:
+                warnings.append(f"Domain '{domain}' has no zones configured")
+
+            for zone in zones:
+                if not isinstance(zone, dict):
+                    raise ValueError(f"Invalid zone entry for '{domain}' (expected a mapping): {zone!r}")
+
+                name = zone.get("name")
+                if not name:
+                    raise ValueError(f"Zone for '{domain}' is missing a 'name' value")
+
+                fqdn = build_fqdn(str(name), domain)
+                if fqdn in seen_fqdns:
+                    raise ValueError(f"Duplicate zone '{fqdn}' — two entries would fight over the same records")
+                seen_fqdns.add(fqdn)
+
+                if not self._parse_zone_nodes(zone):
+                    raise ValueError(f"Zone '{fqdn}' has no usable node entries in 'nodes' or 'ips'")
+
+                proxied = bool(zone.get("proxied", False))
+                raw_ttl = zone.get("ttl", DEFAULT_TTL)
+                if proxied and raw_ttl not in (None, CLOUDFLARE_AUTO_TTL):
+                    warnings.append(
+                        f"Zone '{fqdn}' is proxied, so ttl={raw_ttl} is ignored — "
+                        f"Cloudflare always serves proxied records with Auto TTL"
+                    )
+
+        return warnings
+
     @staticmethod
     def _parse_zone_nodes(zone: dict) -> list:
         """Normalize a zone's node entries from either 'nodes' or legacy 'ips' format.
@@ -295,17 +356,29 @@ class Config:
 
         return result
 
+    @staticmethod
+    def _effective_ttl(ttl: Any, proxied: bool) -> int:
+        """Cloudflare forces Auto TTL (1) on proxied records and rejects any other
+        value, so normalise here rather than letting every create call fail."""
+        if proxied:
+            return CLOUDFLARE_AUTO_TTL
+        try:
+            return int(ttl)
+        except (TypeError, ValueError):
+            return DEFAULT_TTL
+
     def get_all_zones(self) -> list:
         zones = []
         for domain_config in self.domains:
             domain = domain_config.get("domain")
             for zone in domain_config.get("zones") or []:
                 nodes = self._parse_zone_nodes(zone)
+                proxied = bool(zone.get("proxied", False))
                 zone_data = {
                     "domain": domain,
                     "name": zone.get("name"),
-                    "ttl": zone.get("ttl", 120),
-                    "proxied": zone.get("proxied", False),
+                    "ttl": self._effective_ttl(zone.get("ttl", DEFAULT_TTL), proxied),
+                    "proxied": proxied,
                     "nodes": nodes,
                     "ips": [n["ip"] for n in nodes],  # backward-compat: list of DNS IPs
                 }

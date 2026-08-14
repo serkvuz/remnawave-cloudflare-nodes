@@ -1,7 +1,7 @@
 from .events import (
     NodeStateChange, NodeStats, DNSChange, DNSError,
     CriticalState, CriticalStateRecovered, HealthCheckError,
-    ServiceStarted,
+    ServiceStarted, HostSyncFailure,
     ApiConfigUpdated, ApiDomainAdded, ApiDomainRemoved,
     ApiZoneAdded, ApiZoneUpdated, ApiZoneRemoved,
 )
@@ -126,6 +126,11 @@ class MessageFormatter:
                 lines.append(self._i18n.get("host-group-disabled", address=address))
             group_blocks.append("\n".join(lines))
         return self._i18n.get("host-state-change", changes="\n\n".join(group_blocks))
+
+    def format_host_sync_failure(self, event: "HostSyncFailure") -> str:
+        return self._i18n.get(
+            "host-sync-failure", failures=event.failures, error=event.error_message
+        )
 
     def format_api_config_updated(self, event: ApiConfigUpdated) -> str:
         return self._i18n.get(

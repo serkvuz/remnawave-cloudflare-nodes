@@ -1,9 +1,18 @@
-from typing import Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 from .client import RemnawaveClient
-from ..telegram import TelegramNotifier, HostStateChange
-from ..utils.logger import get_logger
 from ..hosts_config import HostsConfig
+from ..telegram import HostStateChange, HostSyncFailure, TelegramNotifier
+from ..utils import short_error
+from ..utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from ..state import StateStore
+
+# Host sync failing is invisible from the outside — the cycle still completes
+# and DNS keeps working — so escalate after a few consecutive failures rather
+# than letting it log quietly forever.
+_FAILURE_ALERT_THRESHOLD = 3
 
 
 class HostManager:
@@ -21,14 +30,18 @@ class HostManager:
         enabled: bool = False,
         notify_changes: bool = True,
         hosts_config: Optional[HostsConfig] = None,
+        state: Optional["StateStore"] = None,
     ):
         self.client = client
         self.notifier = notifier
         self.enabled = enabled
         self.notify_changes = notify_changes
         self.hosts_config = hosts_config
+        self.state = state
         self.logger = get_logger(__name__)
-        self._previous_host_states: Dict[str, bool] = {}
+        self._previous_host_states: Dict[str, bool] = state.host_states if state else {}
+        self._consecutive_failures = 0
+        self._failure_alerted = False
 
     def reload(self) -> None:
         if self.hosts_config:
@@ -37,6 +50,33 @@ class HostManager:
         else:
             self.logger.info("Hosts config not configured, nothing to reload")
 
+    def _record_failure(self, error: Exception) -> None:
+        self._consecutive_failures += 1
+        message = short_error(error)
+        self.logger.error(
+            f"Failed to fetch hosts ({self._consecutive_failures} consecutive): {message}"
+        )
+        if self._consecutive_failures >= _FAILURE_ALERT_THRESHOLD and not self._failure_alerted:
+            self._failure_alerted = True
+            self.logger.error(
+                "Host synchronisation has been failing repeatedly — hosts are no longer "
+                "being enabled or disabled in the panel"
+            )
+            if self.notifier and self.notify_changes:
+                self.notifier.notify_host_sync_failure(
+                    HostSyncFailure(failures=self._consecutive_failures, error_message=message)
+                )
+
+    def _record_success(self) -> None:
+        if self._failure_alerted:
+            self.logger.info("Host synchronisation recovered")
+        self._consecutive_failures = 0
+        self._failure_alerted = False
+
+    def _persist(self) -> None:
+        if self.state:
+            self.state.mark_dirty()
+
     async def sync_host_states(self, active_fqdns: Set[str], managed_fqdns: Set[str]) -> None:
         if not self.enabled:
             return
@@ -44,8 +84,10 @@ class HostManager:
         try:
             hosts = await self.client.get_hosts()
         except Exception as e:
-            self.logger.error(f"Failed to fetch hosts: {e}")
+            self._record_failure(e)
             return
+
+        self._record_success()
 
         to_disable: List[str] = []
         to_enable: List[str] = []
@@ -101,6 +143,8 @@ class HostManager:
         for uuid in stale:
             del self._previous_host_states[uuid]
 
+        self._persist()
+
         successful_changes: List[dict] = []
 
         if to_disable:
@@ -109,9 +153,10 @@ class HostManager:
                 self.logger.info(f"Bulk disabled {len(to_disable)} hosts")
                 successful_changes.extend(disable_changes)
             except Exception as e:
-                self.logger.error(f"Failed to disable hosts: {e}")
+                self.logger.error(f"Failed to disable hosts: {short_error(e)}")
                 for u in to_disable:
                     self._previous_host_states[u] = True
+                self._persist()
 
         if to_enable:
             try:
@@ -119,9 +164,10 @@ class HostManager:
                 self.logger.info(f"Bulk enabled {len(to_enable)} hosts")
                 successful_changes.extend(enable_changes)
             except Exception as e:
-                self.logger.error(f"Failed to enable hosts: {e}")
+                self.logger.error(f"Failed to enable hosts: {short_error(e)}")
                 for u in to_enable:
                     self._previous_host_states[u] = False
+                self._persist()
 
         if successful_changes and self.notifier and self.notify_changes:
             grouped: dict = {}

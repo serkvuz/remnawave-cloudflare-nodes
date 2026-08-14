@@ -72,6 +72,12 @@ class ServiceStarted:
 
 
 @dataclass
+class HostSyncFailure:
+    failures: int
+    error_message: str
+
+
+@dataclass
 class HostStateChange:
     changes: List[dict]  # each dict has: remark, address, action ("enabled" or "disabled")
     # Grouped by address for better formatting: {address: {"action": "enabled|disabled", "remarks": [...]}}

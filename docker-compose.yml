@@ -1,6 +1,17 @@
 services:
   remnawave-cloudflare-nodes:
-    image: hteppl/remnawave-cloudflare-nodes:latest
+    # Built from this repo, not pulled: this tree carries local fixes that are
+    # not in the upstream published image. To go back to upstream, drop the
+    # `build:` block and set `image: hteppl/remnawave-cloudflare-nodes:latest`.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Build in the host network namespace. Docker replaces a loopback
+      # nameserver (systemd-resolved's 127.0.0.53) with 8.8.8.8 inside build
+      # containers, which does not answer on this network, so pip cannot resolve
+      # PyPI. Remove this line if your daemon already has working container DNS.
+      network: host
+    image: remnawave-cloudflare-nodes:local
     container_name: remnawave-cloudflare-nodes
     restart: unless-stopped
     env_file:
@@ -9,6 +20,9 @@ services:
       - ./config.yml:/app/config.yml
       - ./hosts.yml:/app/hosts.yml
       - ./logs:/app/logs
+      # Node/host transition state. Without this the monitor forgets what it saw
+      # before a restart and suppresses the first cycle's notifications.
+      - ./data:/app/data
     networks:
       - remnawave-cloudflare-nodes
 

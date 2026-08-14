@@ -204,6 +204,7 @@ Both formats can be mixed within the same zone or across different zones.
 | `LANGUAGE`                     | Notification language (`en`, `ru`)             | `en`                | No               |
 | `TIMEZONE`                     | Timezone for timestamps (e.g. Europe/Moscow)   | `UTC`               | No               |
 | `TIME_FORMAT`                  | Time format for timestamps                     | `%d.%m.%Y %H:%M:%S` | No               |
+| `STATE_FILE`                   | Where node/host state is kept across restarts  | `data/state.json`   | No               |
 
 #### config.yml
 
@@ -229,6 +230,9 @@ services:
     volumes:
       - ./config.yml:/app/config.yml
       - ./logs:/app/logs
+      # Keeps node/host transition state across restarts. Without it, the first
+      # cycle after a restart re-syncs silently and suppresses notifications.
+      - ./data:/app/data
     networks:
       - remnawave-cloudflare-nodes
 

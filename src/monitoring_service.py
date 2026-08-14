@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Dict, List, Optional, Set
+import time
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from .cloudflare_dns import CloudflareClient, DNSManager
 from .config import Config
@@ -6,7 +7,13 @@ from .panel import HostManager, NodeMonitor
 from .utils import build_fqdn, get_logger, short_error
 
 if TYPE_CHECKING:
+    from .state import StateStore
     from .telegram import TelegramNotifier
+
+# Zone IDs are stable for the life of a zone, but a zone deleted and recreated
+# in Cloudflare gets a new one. Expiring the cache bounds how long a stale ID
+# can be used when the zone changes outside this service.
+_ZONE_CACHE_TTL_SECONDS = 3600
 
 
 class MonitoringService:
@@ -18,6 +25,7 @@ class MonitoringService:
             dns_manager: DNSManager,
             host_manager: Optional["HostManager"] = None,
             notifier: Optional["TelegramNotifier"] = None,
+            state: Optional["StateStore"] = None,
     ):
         self.config = config
         self.node_monitor = node_monitor
@@ -25,9 +33,10 @@ class MonitoringService:
         self.dns_manager = dns_manager
         self.host_manager = host_manager
         self.notifier = notifier
+        self.state = state
         self.logger = get_logger(__name__)
-        self._zone_id_cache: Dict[str, str] = {}
-        self._previous_node_states: Dict[str, bool] = {}
+        self._zone_id_cache: Dict[str, Tuple[str, float]] = {}
+        self._previous_node_states: Dict[str, bool] = state.node_states if state else {}
         self._previous_all_down: bool = False
 
     async def initialize_and_print_zones(self) -> None:
@@ -102,6 +111,9 @@ class MonitoringService:
             if self.host_manager:
                 await self.host_manager.sync_host_states(active_fqdns, managed_fqdns)
 
+            if self.state:
+                self.state.save()
+
             self.logger.info("Health check cycle completed")
 
         except Exception as e:
@@ -160,18 +172,35 @@ class MonitoringService:
         return active_fqdns, managed_fqdns
 
     async def _get_zone_id(self, domain: str) -> Optional[str]:
-        if domain in self._zone_id_cache:
-            return self._zone_id_cache[domain]
+        cached = self._zone_id_cache.get(domain)
+        if cached is not None:
+            zone_id, cached_at = cached
+            if time.monotonic() - cached_at < _ZONE_CACHE_TTL_SECONDS:
+                return zone_id
+            self.logger.debug(f"Zone ID cache for {domain} expired, refreshing")
 
         zone_id = await self.cloudflare_client.get_zone_id_by_domain(domain)
         if zone_id:
-            self._zone_id_cache[domain] = zone_id
+            self._zone_id_cache[domain] = (zone_id, time.monotonic())
+        else:
+            self._zone_id_cache.pop(domain, None)
 
         return zone_id
 
+    def invalidate_zone_id(self, domain: str) -> None:
+        """Drop a cached zone ID — call when a domain is removed from config so a
+        later re-add cannot reuse a stale ID for the process lifetime."""
+        if self._zone_id_cache.pop(domain, None) is not None:
+            self.logger.debug(f"Invalidated cached zone ID for {domain}")
+
     def _check_node_transitions(self, nodes, nodes_by_address: Dict[str, object]) -> None:
-        if not self.notifier or not self.config.telegram_notify_node_changes:
-            return
+        """Track node health transitions and notify on each one.
+
+        Transition tracking runs even when notifications are off: this state is
+        what survives a restart, and gating it on the notifier meant a
+        Telegram-less deployment never recorded node history at all.
+        """
+        notify = bool(self.notifier and self.config.telegram_notify_node_changes)
 
         from .telegram import NodeStateChange, NodeStats, ZoneStats
 
@@ -201,7 +230,8 @@ class MonitoringService:
             curr_healthy = node.is_healthy
 
             if prev_healthy is None:
-                self._previous_node_states[node.address] = curr_healthy
+                # First time we have seen this node — record it without alerting.
+                self._record_node_state(node.address, curr_healthy)
                 continue
 
             if prev_healthy == curr_healthy:
@@ -221,37 +251,44 @@ class MonitoringService:
                         offline=len(znodes) - zone_online[key],
                     ))
 
-            stats = NodeStats(
-                total=total,
-                online=online,
-                offline=total - online,
-                disabled=disabled,
-                zones=zones_stats,
-            )
-
-            reason = None
-            if not curr_healthy:
-                reasons = []
-                if not node.is_connected:
-                    reasons.append("disconnected")
-                if node.is_disabled:
-                    reasons.append("disabled")
-                if not node.xray_version:
-                    reasons.append("no xray")
-                reason = ", ".join(reasons) if reasons else "unknown"
-
-            self.notifier.notify_node_state_change(
-                NodeStateChange(
-                    node_name=node.name,
-                    node_address=node.address,
-                    previous_healthy=prev_healthy,
-                    current_healthy=curr_healthy,
-                    stats=stats,
-                    reason=reason,
+            if notify:
+                stats = NodeStats(
+                    total=total,
+                    online=online,
+                    offline=total - online,
+                    disabled=disabled,
+                    zones=zones_stats,
                 )
-            )
 
-            self._previous_node_states[node.address] = curr_healthy
+                reason = None
+                if not curr_healthy:
+                    reasons = []
+                    if not node.is_connected:
+                        reasons.append("disconnected")
+                    if node.is_disabled:
+                        reasons.append("disabled")
+                    if not node.xray_version:
+                        reasons.append("no xray")
+                    reason = ", ".join(reasons) if reasons else "unknown"
+
+                self.notifier.notify_node_state_change(
+                    NodeStateChange(
+                        node_name=node.name,
+                        node_address=node.address,
+                        previous_healthy=prev_healthy,
+                        current_healthy=curr_healthy,
+                        stats=stats,
+                        reason=reason,
+                    )
+                )
+
+            self._record_node_state(node.address, curr_healthy)
+
+    def _record_node_state(self, address: str, healthy: bool) -> None:
+        if self._previous_node_states.get(address) != healthy:
+            self._previous_node_states[address] = healthy
+            if self.state:
+                self.state.mark_dirty()
 
     async def cleanup_zone(self, domain: str, zone_name: str) -> None:
         zone_id = await self._get_zone_id(domain)
@@ -269,7 +306,8 @@ class MonitoringService:
             if domain_conf.get("domain") == domain:
                 for zone in domain_conf.get("zones") or []:
                     await self.dns_manager.cleanup_zone(zone_id, zone["name"], domain)
-                return
+                break
+        self.invalidate_zone_id(domain)
 
     def _check_critical_state(self, configured_nodes, unhealthy_nodes) -> None:
         if not self.notifier or not self.config.telegram_notify_critical:

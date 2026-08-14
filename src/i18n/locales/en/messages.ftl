@@ -100,3 +100,9 @@ host-group-enabled = <i>Some nodes managing { $address } are up</i>
 host-group-disabled = <i>All nodes managing { $address } are down</i>
 host-state-change = <b>🔧 Host State Changed</b>
     { $changes }
+
+host-sync-failure = <b>⚠️ Host Sync Failing</b>
+    Could not read hosts from the panel { $failures } times in a row.
+    Hosts are no longer being enabled or disabled.
+
+    Error: { $error }

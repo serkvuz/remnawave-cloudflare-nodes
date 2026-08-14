@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-RUN mkdir -p logs
+RUN mkdir -p logs data
 
 RUN printf '#!/bin/sh\nexec python -m src.cli "$@"\n' > /usr/local/bin/cli && chmod +x /usr/local/bin/cli
 

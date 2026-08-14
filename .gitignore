@@ -213,6 +213,7 @@ docker-compose.override.yml
 
 # Application-specific
 logs/
+data/
 *.log
 config.yml
 !config.example.yml

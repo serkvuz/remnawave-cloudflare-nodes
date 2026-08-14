@@ -12,6 +12,7 @@ services:
       - ./config.yml:/app/config.yml
       - ./hosts.yml:/app/hosts.yml
       - ./logs:/app/logs
+      - ./data:/app/data
     networks:
       - remnawave-cloudflare-nodes
 
