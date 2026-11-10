@@ -185,6 +185,8 @@ Both formats can be mixed within the same zone or across different zones.
 |--------------------------------|------------------------------------------------|---------------------|------------------|
 | `REMNAWAVE_API_URL`            | Remnawave API endpoint                         | -                   | Yes              |
 | `REMNAWAVE_API_KEY`            | Remnawave API token                            | -                   | Yes              |
+| `CF_ACCESS_CLIENT_ID`          | Cloudflare Access service token ID (panel behind Zero Trust) | -     | No               |
+| `CF_ACCESS_CLIENT_SECRET`      | Cloudflare Access service token secret         | -                   | No               |
 | `CLOUDFLARE_API_TOKEN`         | Cloudflare API token with DNS edit permissions | -                   | Yes              |
 | `LOG_LEVEL`                    | Log level (`DEBUG` `INFO` `WARNING` `ERROR`)   | `INFO`              | No               |
 | `API_ENABLED`                  | Enable the HTTP API server                     | `false`             | No               |

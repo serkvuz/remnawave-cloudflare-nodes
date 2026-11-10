@@ -110,7 +110,10 @@ async def main():
     state.load()
 
     remnawave_client = RemnawaveClient(
-        api_url=config.remnawave_url, api_key=config.remnawave_api_key
+        api_url=config.remnawave_url,
+        api_key=config.remnawave_api_key,
+        cf_access_client_id=config.cf_access_client_id,
+        cf_access_client_secret=config.cf_access_client_secret,
     )
 
     node_monitor = NodeMonitor(remnawave_client)

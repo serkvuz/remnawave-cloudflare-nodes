@@ -86,6 +86,14 @@ class Config:
         return os.getenv("REMNAWAVE_API_KEY", "")
 
     @property
+    def cf_access_client_id(self) -> str:
+        return os.getenv("CF_ACCESS_CLIENT_ID", "")
+
+    @property
+    def cf_access_client_secret(self) -> str:
+        return os.getenv("CF_ACCESS_CLIENT_SECRET", "")
+
+    @property
     def cloudflare_token(self) -> str:
         return os.getenv("CLOUDFLARE_API_TOKEN", "")
 
@@ -263,6 +271,12 @@ class Config:
             missing.append("CLOUDFLARE_API_TOKEN")
         if missing:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+        if bool(self.cf_access_client_id) != bool(self.cf_access_client_secret):
+            raise ValueError(
+                "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must be set together "
+                "(Cloudflare Access service token for the panel)"
+            )
 
         if self.api_enabled:
             token = self.api_token

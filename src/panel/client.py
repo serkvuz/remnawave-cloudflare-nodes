@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -41,16 +42,39 @@ class PanelHost:
 
 
 class RemnawaveClient:
-    def __init__(self, api_url: str, api_key: str, timeout: float = 30.0):
+    def __init__(
+        self,
+        api_url: str,
+        api_key: str,
+        timeout: float = 30.0,
+        cf_access_client_id: str = "",
+        cf_access_client_secret: str = "",
+    ):
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self.logger = get_logger(__name__)
-        self.sdk = RemnawaveSDK(base_url=self.api_url, token=self.api_key)
+
+        # Cloudflare Access (Zero Trust) service token. Without it, Access answers
+        # API calls with an HTML login page and JSON parsing fails.
+        access_headers: Dict[str, str] = {}
+        if cf_access_client_id and cf_access_client_secret:
+            access_headers = {
+                "CF-Access-Client-Id": cf_access_client_id,
+                "CF-Access-Client-Secret": cf_access_client_secret,
+            }
+            self.logger.info("Using Cloudflare Access service token for panel requests")
+
+        self.sdk = RemnawaveSDK(
+            base_url=self.api_url,
+            token=self.api_key,
+            custom_headers=access_headers or None,
+        )
         self._http = httpx.AsyncClient(
             base_url=f"{self.api_url}/api",
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **access_headers,
             },
             timeout=timeout,
         )
@@ -67,6 +91,13 @@ class RemnawaveClient:
 
             self.logger.info(f"Successfully fetched {len(nodes_list)} nodes")
             return nodes_list
+        except json.JSONDecodeError as e:
+            self.logger.error(
+                "Error fetching nodes: panel returned a non-JSON response. If the panel is "
+                "behind Cloudflare Access (Zero Trust), set CF_ACCESS_CLIENT_ID and "
+                "CF_ACCESS_CLIENT_SECRET to a service token allowed by the Access policy"
+            )
+            raise RuntimeError("Panel returned a non-JSON response (blocked by a proxy?)") from e
         except Exception as e:
             self.logger.error(f"Error fetching nodes: {short_error(e)}")
             raise
