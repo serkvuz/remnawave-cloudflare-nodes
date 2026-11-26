@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, List
 
 from .utils.logger import get_logger
 
@@ -28,6 +28,12 @@ class StateStore:
         self.logger = get_logger(__name__)
         self.node_states: Dict[str, bool] = {}
         self.host_states: Dict[str, bool] = {}
+        # DNS pause: {"since": epoch, "until": epoch | None, "by": str}; empty when not paused.
+        self.pause: Dict[str, Any] = {}
+        # Addresses of nodes that were in maintenance at the end of the last cycle.
+        self.maintenance: List[str] = []
+        # Rolling statistics for the periodic summary (owned by SummaryTracker).
+        self.summary: Dict[str, Any] = {}
         self._writable = True
         self._dirty = False
 
@@ -48,6 +54,13 @@ class StateStore:
 
         self.node_states = self._coerce_bool_map(data.get("node_states"))
         self.host_states = self._coerce_bool_map(data.get("host_states"))
+        # Keys below were added later; files written before them simply lack them.
+        pause = data.get("pause")
+        self.pause = pause if isinstance(pause, dict) else {}
+        maintenance = data.get("maintenance")
+        self.maintenance = [str(a) for a in maintenance] if isinstance(maintenance, list) else []
+        summary = data.get("summary")
+        self.summary = summary if isinstance(summary, dict) else {}
         self.logger.info(
             f"Restored state from {self.path}: "
             f"{len(self.node_states)} node(s), {len(self.host_states)} host(s)"
@@ -70,6 +83,9 @@ class StateStore:
             "version": _SCHEMA_VERSION,
             "node_states": self.node_states,
             "host_states": self.host_states,
+            "pause": self.pause,
+            "maintenance": self.maintenance,
+            "summary": self.summary,
         }
 
         try:

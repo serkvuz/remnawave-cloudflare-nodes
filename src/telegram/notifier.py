@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional
+from typing import List, Optional
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -8,12 +8,41 @@ from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 
 from .events import (
     NodeStateChange, DNSChange, DNSError, CriticalState, CriticalStateRecovered, HealthCheckError,
+    HealthCheckRecovered, NodesDiscovered, MaintenanceChanged, DnsPaused, DnsResumed, SummaryReport,
     ServiceStarted, HostStateChange, HostSyncFailure,
     ApiConfigUpdated, ApiDomainAdded, ApiDomainRemoved,
     ApiZoneAdded, ApiZoneUpdated, ApiZoneRemoved,
 )
 from .formatter import MessageFormatter
 from ..utils.logger import get_logger
+
+
+# Telegram rejects messages over 4096 characters; leave room for entity overhead.
+MAX_MESSAGE_LENGTH = 4000
+
+
+def split_message(message: str, limit: int = MAX_MESSAGE_LENGTH) -> List[str]:
+    """Split on line boundaries so no chunk exceeds the limit. Formatting tags in
+    these messages never span lines, so a line boundary is always a safe cut."""
+    if len(message) <= limit:
+        return [message]
+    chunks, current = [], ""
+    for line in message.split("\n"):
+        while len(line) > limit:  # a single overlong line: hard-cut it
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 class TelegramNotifier:
@@ -140,10 +169,12 @@ class TelegramNotifier:
         if not self.enabled or not message:
             return
 
-        try:
-            self._queue.put_nowait(message)
-        except asyncio.QueueFull:
-            self.logger.warning("Notification queue is full, dropping message")
+        for chunk in split_message(message):
+            try:
+                self._queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                self.logger.warning("Notification queue is full, dropping message")
+                return
 
     def notify_node_state_change(self, change: NodeStateChange) -> None:
         if not self.enabled:
@@ -180,6 +211,47 @@ class TelegramNotifier:
             return
         message = self._formatter.format_health_check_error(error)
         self._enqueue(message)
+
+    def notify_health_check_recovered(self, event: HealthCheckRecovered) -> None:
+        if not self.enabled:
+            return
+        message = self._formatter.format_health_check_recovered(event)
+        self._enqueue(message)
+
+    def notify_nodes_discovered(self, event: NodesDiscovered) -> None:
+        if not self.enabled:
+            return
+        message = self._formatter.format_nodes_discovered(event)
+        self._enqueue(message)
+
+    def notify_maintenance_changed(self, event: MaintenanceChanged) -> None:
+        if not self.enabled:
+            return
+        self._enqueue(self._formatter.format_maintenance_changed(event))
+
+    def notify_dns_paused(self, event: DnsPaused) -> None:
+        if not self.enabled:
+            return
+        self._enqueue(self._formatter.format_dns_paused(event))
+
+    def notify_dns_resumed(self, event: DnsResumed) -> None:
+        if not self.enabled:
+            return
+        self._enqueue(self._formatter.format_dns_resumed(event))
+
+    def notify_summary(self, report: SummaryReport) -> None:
+        if not self.enabled:
+            return
+        self._enqueue(self._formatter.format_summary(report))
+
+    @property
+    def bot(self):
+        """The aiogram Bot, shared with the command handler. None when disabled."""
+        return self._bot
+
+    @property
+    def formatter(self):
+        return self._formatter
 
     def notify_service_started(self, event: ServiceStarted) -> None:
         if not self.enabled:

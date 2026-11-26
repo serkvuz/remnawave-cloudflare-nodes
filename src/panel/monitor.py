@@ -7,9 +7,31 @@ from ..utils import get_logger, short_error
 
 
 class NodeStatus:
+    """A panel node plus the monitor's verdict on it.
+
+    `is_healthy` is this cycle's raw verdict: the panel's view, AND-ed with the
+    TCP probe when probing is enabled. Flap protection and maintenance are
+    applied on top of it by MonitoringService, which decides what goes in DNS.
+    """
+
     def __init__(self, node: NodeResponseDto, is_healthy: bool):
         self.node = node
+        self.panel_healthy = is_healthy
         self.is_healthy = is_healthy
+        # Set by the prober: failing "ip:port (reason)" targets, empty when reachable.
+        self.probe_failures: List[str] = []
+
+    def unhealthy_reasons(self) -> List[str]:
+        reasons = []
+        if not self.node.is_connected:
+            reasons.append("disconnected")
+        if self.node.is_disabled:
+            reasons.append("disabled")
+        if not self.node.xray_version:
+            reasons.append("no xray")
+        if self.probe_failures:
+            reasons.append("unreachable " + ", ".join(self.probe_failures))
+        return reasons
 
     def __getattr__(self, name: str):
         return getattr(self.node, name)

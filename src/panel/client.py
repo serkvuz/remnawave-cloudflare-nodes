@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from remnawave import RemnawaveSDK
@@ -18,7 +18,7 @@ class PanelHost:
     required, so a single renamed field the monitor never reads (panel v2.8
     renamed `xHttpExtraParams` to `xhttpExtraParams` and `tag` to `tags`) fails
     validation for the entire host list and silently disables host management.
-    Reading only these four fields makes host sync immune to schema drift
+    Reading only these few fields makes host sync immune to schema drift
     everywhere else in the payload.
     """
 
@@ -26,6 +26,8 @@ class PanelHost:
     address: str
     remark: str
     is_disabled: bool
+    # UUIDs of the nodes this host is bound to (empty = not bound to specific nodes)
+    node_uuids: Tuple[str, ...] = ()
 
     @classmethod
     def from_payload(cls, item: Dict[str, Any]) -> Optional["PanelHost"]:
@@ -38,7 +40,20 @@ class PanelHost:
             address=str(address),
             remark=str(item.get("remark") or address),
             is_disabled=bool(item.get("isDisabled", False)),
+            node_uuids=cls._parse_node_uuids(item.get("nodes")),
         )
+
+    @staticmethod
+    def _parse_node_uuids(raw: Any) -> Tuple[str, ...]:
+        if not isinstance(raw, list):
+            return ()
+        uuids = []
+        for entry in raw:
+            if isinstance(entry, dict):
+                entry = entry.get("uuid")
+            if entry:
+                uuids.append(str(entry).lower())
+        return tuple(uuids)
 
 
 class RemnawaveClient:
@@ -173,5 +188,19 @@ class RemnawaveClient:
         return node.is_disabled
 
     @staticmethod
+    def has_xray(node: NodeResponseDto) -> bool:
+        return bool(node.xray_version)
+
+    @staticmethod
     def is_node_healthy(node: NodeResponseDto) -> bool:
-        return RemnawaveClient.is_node_connected(node) and not RemnawaveClient.is_node_disabled(node)
+        """Connected to the panel, not disabled, and running Xray.
+
+        A node can stay connected while its Xray core is down (failed config
+        push, crashed core); the panel then reports no xrayVersion and the node
+        serves no users, so it must not stay in DNS.
+        """
+        return (
+            RemnawaveClient.is_node_connected(node)
+            and not RemnawaveClient.is_node_disabled(node)
+            and RemnawaveClient.has_xray(node)
+        )

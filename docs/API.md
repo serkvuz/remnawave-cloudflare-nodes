@@ -411,6 +411,79 @@ DELETE /api/config/domains/example.com/zones/s1
 
 ---
 
+### GET `/api/status`
+
+Current node states (as DNS sees them, after flap protection and maintenance), the pause state, any ongoing
+health-check failure, and the live A records of every zone.
+
+```json
+{
+  "last_cycle_at": 1795000000.0,
+  "nodes": [
+    {"name": "node-1", "address": "1.2.3.4", "healthy": true, "raw_healthy": true,
+     "maintenance": false, "pending": null, "reasons": []},
+    {"name": "node-2", "address": "5.6.7.8", "healthy": true, "raw_healthy": false,
+     "maintenance": false, "pending": "1/3", "reasons": ["unreachable 5.6.7.8:443 (timed out)"]}
+  ],
+  "missing": [],
+  "paused": null,
+  "failing": null,
+  "dns": [{"fqdn": "s1.example.com", "configured": 2, "records": ["1.2.3.4", "5.6.7.8"], "error": null}]
+}
+```
+
+`pending` means the node's checks disagree with its DNS state and flap protection is counting (`streak/needed`).
+
+---
+
+### POST `/api/pause`
+
+Freeze DNS record and panel host changes. Health checks and alerts continue.
+
+```json
+{"duration": "2h"}
+```
+
+`duration` accepts `90s`, `30m`, `2h`, `1d`, `1h30m` or a bare number of minutes. Omit the body (or `duration`) to
+pause until resumed. Responds with `{"status": "ok", "until": "<time or null>"}`. `422` for an invalid duration.
+
+### POST `/api/resume`
+
+Lift the pause and run a check now. Responds `{"status": "ok"}`, with `"detail": "not paused"` if nothing was paused.
+
+---
+
+### GET `/api/maintenance`
+
+```json
+[{"entry": "node-3", "name": "node-3", "address": "9.9.9.9"}]
+```
+
+`name`/`address` are `null` when the entry matches no panel node.
+
+### POST `/api/maintenance`
+
+```json
+{"node": "node-3"}
+```
+
+`node` is a node name, address or UUID. Writes `config.yml` (with a backup) and runs a check now. Responds
+`201 {"status": "ok", "changed": true}`; `changed` is `false` if it was already in maintenance. `404` if no panel node
+matches.
+
+### DELETE `/api/maintenance/{node}`
+
+Take a node out of maintenance; any of its identifiers works. `404` if it was not in maintenance.
+
+---
+
+### GET `/api/summary`
+
+The statistics collected since the last periodic summary: per-node uptime (%), outage count and longest outage
+(seconds), DNS changes, and health-check failures.
+
+---
+
 ## Error responses
 
 All error responses follow the same shape:

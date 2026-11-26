@@ -7,11 +7,14 @@ import uvicorn
 
 from .cloudflare_dns import CloudflareClient, DNSManager
 from .config import Config
+from .discovery import NodeDiscovery
 from .hosts_config import HostsConfig
 from .i18n import get_translator
 from .monitoring_service import MonitoringService
 from .panel import HostManager, NodeMonitor, RemnawaveClient
+from .probe import TcpProber
 from .state import StateStore
+from .summary import SummaryTracker
 from .telegram import ServiceStarted, TelegramNotifier
 from .utils import setup_logger, short_error
 
@@ -39,9 +42,17 @@ async def run_monitoring_loop(
             interval = config.check_interval
             logger.info(f"Retrying in {interval} seconds after error: {short_error(e)}")
 
-        # Wake immediately on shutdown instead of sleeping out the full interval.
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(shutdown.wait(), timeout=interval)
+        # Wake immediately on shutdown, or when a command asks for a check now
+        # (/resume, /reload, maintenance changes), instead of sleeping it out.
+        wake = service.wake_event
+        waiters = [asyncio.create_task(shutdown.wait()), asyncio.create_task(wake.wait())]
+        try:
+            await asyncio.wait(waiters, timeout=interval, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in waiters:
+                task.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+        wake.clear()
 
 
 def install_signal_handlers(loop, shutdown: asyncio.Event, logger) -> None:
@@ -85,19 +96,34 @@ async def main():
     install_signal_handlers(loop, shutdown, logger)
 
     host_manager = None
+    monitoring_service = None
+
+    async def reload_config():
+        """Reload config.yml and hosts.yml. Returns None on success, else the error."""
+        lock = monitoring_service.lock if monitoring_service else contextlib.nullcontext()
+        async with lock:  # never swap the config under a running cycle
+            try:
+                config.reload()  # rolls back by itself if the new file is invalid
+                config.validate()
+                for warning in config.validate_zones():
+                    logger.warning(warning)
+                if host_manager:
+                    host_manager.reload()
+            except Exception as e:
+                logger.error(f"Config reload failed, keeping current config: {e}")
+                return str(e)
+        logger.info(
+            "Reloaded config.yml and hosts.yml from disk "
+            "(environment variables are read at startup and need a restart)"
+        )
+        return None
+
+    reload_tasks = set()
 
     def handle_sighup():
-        try:
-            config.reload()
-            config.validate()
-            if host_manager:
-                host_manager.reload()
-            logger.info(
-                "Reloaded config.yml and hosts.yml from disk "
-                "(environment variables are read at startup and need a restart)"
-            )
-        except Exception as e:
-            logger.error(f"Config reload failed, keeping current config: {e}")
+        task = asyncio.create_task(reload_config())
+        reload_tasks.add(task)
+        task.add_done_callback(reload_tasks.discard)
 
     loop.add_signal_handler(signal.SIGHUP, handle_sighup)
 
@@ -143,6 +169,9 @@ async def main():
         notify_errors=config.telegram_notify_errors,
     )
 
+    summary = SummaryTracker(config=config, state=state, notifier=notifier)
+    dns_manager.on_change = summary.record_dns_change
+
     monitoring_service = MonitoringService(
         config=config,
         node_monitor=node_monitor,
@@ -151,7 +180,26 @@ async def main():
         host_manager=host_manager,
         notifier=notifier,
         state=state,
+        discovery=NodeDiscovery(config=config, client=remnawave_client, notifier=notifier),
+        prober=TcpProber(),
+        summary=summary,
     )
+
+    command_bot = None
+    if config.telegram_commands_enabled:
+        if notifier.bot is None:
+            logger.warning("TELEGRAM_COMMANDS_ENABLED is set but Telegram is disabled or not configured")
+        else:
+            from .telegram.commands import CommandBot
+
+            command_bot = CommandBot(
+                bot=notifier.bot,
+                formatter=notifier.formatter,
+                config=config,
+                service=monitoring_service,
+                summary=summary,
+                reload=reload_config,
+            )
 
     api_task = None
     exit_code = 0
@@ -169,10 +217,13 @@ async def main():
 
         await monitoring_service.initialize_and_print_zones()
 
+        if command_bot:
+            await command_bot.start()
+
         if config.api_enabled:
             from .api import create_app
 
-            api_app = create_app(config, notifier, monitoring_service)
+            api_app = create_app(config, notifier, monitoring_service, summary)
             api_task = asyncio.create_task(
                 run_api_server(api_app, config.api_host, config.api_port)
             )
@@ -187,6 +238,8 @@ async def main():
         logger.error(f"Fatal error: {e}", exc_info=True)
         exit_code = 1
     finally:
+        if command_bot:
+            await command_bot.stop()
         if api_task:
             api_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

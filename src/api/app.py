@@ -1,9 +1,9 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 
 from .auth import make_auth_dependency
-from .models import ConfigPatch, DomainIn, ZoneIn, ZonePatch
+from .models import ConfigPatch, DomainIn, MaintenanceIn, PauseIn, ZoneIn, ZonePatch
 from ..config import Config
 from ..telegram import (
     TelegramNotifier,
@@ -14,10 +14,12 @@ from ..telegram import (
     ApiZoneUpdated,
     ApiZoneRemoved,
 )
+from ..utils import parse_duration, short_error
 from ..utils.logger import get_logger
 
 if TYPE_CHECKING:
     from ..monitoring_service import MonitoringService
+    from ..summary import SummaryTracker
 
 logger = get_logger(__name__)
 
@@ -32,7 +34,12 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-def create_app(config: Config, notifier: TelegramNotifier, monitoring_service: "MonitoringService") -> FastAPI:
+def create_app(
+    config: Config,
+    notifier: TelegramNotifier,
+    monitoring_service: "MonitoringService",
+    summary: Optional["SummaryTracker"] = None,
+) -> FastAPI:
     app = FastAPI(
         title="Remnawave Cloudflare DNS Monitor",
         version="1.0.0",
@@ -50,6 +57,11 @@ def create_app(config: Config, notifier: TelegramNotifier, monitoring_service: "
             "log_level": config.log_level,
             "domains": config.domains,
             "disable_unreachable_hosts": config.disable_unreachable_hosts,
+            "fail_threshold": config.fail_threshold,
+            "recover_threshold": config.recover_threshold,
+            "probe": config.probe,
+            "maintenance": config.maintenance,
+            "summary": config.summary,
             "telegram": {
                 "enabled": config.telegram_enabled,
                 "language": config.language,
@@ -60,6 +72,7 @@ def create_app(config: Config, notifier: TelegramNotifier, monitoring_service: "
                     "critical": config.telegram_notify_critical,
                     "api_changes": config.telegram_notify_api_changes,
                     "host_changes": config.telegram_notify_host_changes,
+                    "maintenance": config.telegram_notify_maintenance,
                 },
             },
         }
@@ -174,5 +187,77 @@ def create_app(config: Config, notifier: TelegramNotifier, monitoring_service: "
         logger.info(f"API: removed zone '{zone_name}' from '{domain}' [from {ip}]")
         notifier.notify_api_zone_removed(ApiZoneRemoved(domain=domain, zone_name=zone_name, client_ip=ip))
         return {"status": "ok"}
+
+    # --- runtime control ---
+
+    @app.get("/api/status", dependencies=[Depends(auth)])
+    async def get_status(request: Request):
+        logger.debug(f"API: GET status [from {_client_ip(request)}]")
+        snapshot = monitoring_service.status_snapshot()
+        snapshot["dns"] = await monitoring_service.dns_overview()
+        return snapshot
+
+    @app.post("/api/pause", dependencies=[Depends(auth)])
+    async def pause_dns(request: Request, body: Optional[PauseIn] = None):
+        ip = _client_ip(request)
+        duration = None
+        if body and body.duration:
+            try:
+                duration = parse_duration(body.duration)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+        event = monitoring_service.pause(duration, by=f"API ({ip})")
+        logger.info(f"API: paused DNS changes for {body.duration if duration else 'until resumed'} [from {ip}]")
+        return {"status": "ok", "until": event.until}
+
+    @app.post("/api/resume", dependencies=[Depends(auth)])
+    async def resume_dns(request: Request):
+        ip = _client_ip(request)
+        if monitoring_service.resume(by=f"API ({ip})") is None:
+            return {"status": "ok", "detail": "not paused"}
+        logger.info(f"API: resumed DNS changes [from {ip}]")
+        return {"status": "ok"}
+
+    @app.get("/api/maintenance", dependencies=[Depends(auth)])
+    async def list_maintenance(request: Request):
+        logger.debug(f"API: GET maintenance [from {_client_ip(request)}]")
+        return monitoring_service.maintenance_entries()
+
+    @app.post("/api/maintenance", status_code=status.HTTP_201_CREATED, dependencies=[Depends(auth)])
+    async def add_maintenance(request: Request, body: MaintenanceIn):
+        ip = _client_ip(request)
+        node = monitoring_service.find_node(body.node)
+        if node is None and monitoring_service.last_nodes:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No panel node matches '{body.node}'")
+        try:
+            changed = config.add_maintenance(node.name if node else body.node.strip())
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=short_error(e))
+        if changed:
+            logger.info(f"API: node '{body.node}' put into maintenance [from {ip}]")
+            monitoring_service.request_check()
+        return {"status": "ok", "changed": changed}
+
+    @app.delete("/api/maintenance/{node}", dependencies=[Depends(auth)])
+    async def remove_maintenance(request: Request, node: str):
+        ip = _client_ip(request)
+        found = monitoring_service.find_node(node)
+        identifiers = [node] + ([found.name, found.address, str(found.uuid)] if found else [])
+        try:
+            changed = config.remove_maintenance(identifiers)
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=short_error(e))
+        if not changed:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"'{node}' is not in maintenance")
+        logger.info(f"API: node '{node}' taken out of maintenance [from {ip}]")
+        monitoring_service.request_check()
+        return {"status": "ok"}
+
+    @app.get("/api/summary", dependencies=[Depends(auth)])
+    async def get_summary(request: Request):
+        if not summary:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Summary tracking is not available")
+        logger.debug(f"API: GET summary [from {_client_ip(request)}]")
+        return summary.build_report(scheduled=False).__dict__
 
     return app

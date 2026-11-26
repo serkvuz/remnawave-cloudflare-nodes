@@ -38,6 +38,15 @@ def action_show():
     print(f"    Log level      : {config.log_level}")
     print(f"    API            : {'enabled' + api_info if config.api_enabled else 'disabled'}")
     print(f"    Telegram       : {'enabled' + tg_info if config.telegram_enabled else 'disabled'}")
+    print(f"    Flap guard     : leave DNS after {config.fail_threshold} bad check(s), "
+          f"return after {config.recover_threshold} good")
+    probe = config.probe
+    print(f"    TCP probe      : "
+          + (f"port {probe['port']}, {probe['timeout']}s x{probe['attempts']}" if probe["enabled"] else "disabled"))
+    summary = config.summary
+    when = summary["time"] + (f" on {summary['weekday']}" if summary["schedule"] == "weekly" else "")
+    print(f"    Summary        : " + (f"{summary['schedule']} at {when}" if summary["enabled"] else "disabled"))
+    print(f"    Maintenance    : {', '.join(config.maintenance) or 'none'}")
 
     print("\n  Domains & Zones")
     if not zones:

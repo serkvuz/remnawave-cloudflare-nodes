@@ -34,6 +34,13 @@ dns-operation-error = <b>⚠️ DNS Error</b>
 health-check-error = <b>⚠️ Health Check Failed</b>
     Error during health check: { $error }
 
+    You will be notified when it recovers.
+
+health-check-recovered = <b>✅ Health Check Recovered</b>
+    Health checks are working again.
+    Failed for { $duration } ({ $cycles } cycles).
+    Last error: { $error }
+
 # Critical states
 all-nodes-down = <b>🔴 CRITICAL: All Nodes Down</b>
     All { $total } nodes are unreachable.
@@ -106,3 +113,96 @@ host-sync-failure = <b>⚠️ Host Sync Failing</b>
     Hosts are no longer being enabled or disabled.
 
     Error: { $error }
+
+# Auto-discovery
+nodes-discovered = <b>🆕 New Nodes Added to config.yml</b>
+    { $changes }
+discovery-line = • { $name } ({ $ip }) → { $fqdn }
+discovery-line-new-zone = • { $name } ({ $ip }) → { $fqdn } (new zone)
+
+# Maintenance and pause
+maintenance-changed = <b>🔧 Maintenance</b>
+    { $changes }
+maintenance-started-line = • { $name } ({ $address }) is in maintenance: out of DNS, alerts muted
+maintenance-ended-healthy = • { $name } ({ $address }) left maintenance and is healthy: back in DNS
+maintenance-ended-unhealthy = • { $name } ({ $address }) left maintenance but is unhealthy: kept out of DNS
+maintenance-ended-gone = • { $name } left maintenance (no longer in the panel)
+
+dns-paused = <b>⏸️ DNS Changes Paused</b>
+    By: { $by }
+    { $until }
+
+    Health checks and alerts continue. DNS records and panel hosts are not changed.
+dns-paused-until = Until: { $until }
+dns-paused-indefinite = Until resumed with /resume
+dns-resumed = <b>▶️ DNS Changes Resumed</b>
+    By: { $by }
+    Paused for { $duration }. DNS records are being synced now.
+dns-resumed-auto = <b>▶️ DNS Changes Resumed</b>
+    The pause expired after { $duration }. DNS records are being synced now.
+
+# Periodic summary
+summary-daily = <b>📊 Daily Summary</b>
+summary-weekly = <b>📊 Weekly Summary</b>
+summary-current = <b>📊 Summary So Far</b>
+summary-period = 🗓 { $start } → { $end }
+summary-no-nodes = No nodes observed yet.
+summary-node-no-data = • { $name }: no data yet
+summary-node-clean = • { $name }: { $uptime } up, no outages
+summary-node-line = • { $name }: { $uptime } up, { $outages ->
+        [one] 1 outage
+       *[other] { $outages } outages
+    }, longest { $longest }
+summary-ongoing = (still down)
+summary-longest = ⏱ Longest outage: { $name }, { $duration }
+summary-no-outages = ⏱ No outages in this period
+summary-dns = 🌐 DNS changes: { $added } added, { $removed } removed
+summary-checks = 🩺 Health checks: { $failures } of { $cycles } failed
+
+# /status
+status-title = <b>📡 Status</b>
+status-last-check = Last check: { $time }
+status-never = No health check has completed yet.
+status-failing = ⚠️ Health checks failing for { $duration } ({ $cycles } cycles): { $error }
+status-paused = ⏸️ DNS changes paused by { $by }, { $until }
+status-paused-until = until { $time }
+status-paused-indefinite = until /resume
+status-nodes-header = <b>Nodes</b> ({ $online }/{ $total } in DNS)
+status-node-online = ✅ { $name } ({ $address })
+status-node-offline = ❌ { $name } ({ $address }): { $reasons }
+status-node-maintenance = 🔧 { $name } ({ $address }): maintenance
+status-node-pending-down = ⏳ { $name } ({ $address }): failing { $pending }, still in DNS ({ $reasons })
+status-node-pending-up = ⏳ { $name } ({ $address }): recovering { $pending }, still out of DNS
+status-node-missing = ❔ { $address }: in config.yml but not in the panel
+status-dns-header = <b>DNS</b>
+status-dns-line = • { $fqdn }: { $records } ({ $count }/{ $total })
+status-dns-empty = • { $fqdn }: no records (0/{ $total })
+status-dns-error = • { $fqdn }: ⚠️ { $error }
+
+# Bot commands
+cmd-help = <b>🤖 Commands</b>
+    /status: nodes and current DNS records
+    /reload: reload config.yml and hosts.yml
+    /pause [30m|2h|1d]: stop DNS changes (no duration = until /resume)
+    /resume: resume DNS changes
+    /maintenance: list nodes in maintenance
+    /maintenance on &lt;node&gt;: put a node into maintenance
+    /maintenance off &lt;node&gt;: take a node out of maintenance
+    /summary: uptime statistics so far
+cmd-reload-ok = ✅ Config reloaded. A health check is running now.
+cmd-reload-failed = ❌ Reload failed, the previous config is still active:
+    { $error }
+cmd-error = ❌ { $error }
+cmd-resume-not-paused = DNS changes are not paused.
+cmd-maintenance-list = <b>🔧 In maintenance</b>
+    { $entries }
+cmd-maintenance-empty = No nodes are in maintenance.
+cmd-maintenance-entry = • { $name } ({ $address })
+cmd-maintenance-entry-unmatched = • { $entry } (matches no panel node)
+cmd-maintenance-usage = Usage: /maintenance on &lt;node&gt; or /maintenance off &lt;node&gt;, where &lt;node&gt; is a node name, address or UUID.
+cmd-maintenance-unknown = ❌ No panel node matches "{ $node }". Nodes: { $nodes }
+cmd-maintenance-no-data = ❌ The node list is not loaded yet. Try again after the first health check.
+cmd-maintenance-on = 🔧 { $name } is going into maintenance. A health check is running now.
+cmd-maintenance-already = { $name } is already in maintenance.
+cmd-maintenance-off = ✅ { $name } is leaving maintenance. A health check is running now.
+cmd-maintenance-not-in = { $name } is not in maintenance.

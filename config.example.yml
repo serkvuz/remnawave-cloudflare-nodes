@@ -1,6 +1,47 @@
 remnawave:
   # Health check interval in seconds
   check-interval: 30
+  # Flap protection: consecutive bad cycles before a node is taken out of DNS,
+  # and consecutive good cycles before it is put back. 1 = act immediately.
+  fail-threshold: 3
+  recover-threshold: 2
+
+# Optional TCP check from this monitor to each node's DNS IP. The panel only
+# knows whether a node is connected to it; this catches nodes users cannot
+# reach (firewall change, blocked IP, dead port). A zone can override the port
+# with `probe-port`.
+probe:
+  enabled: false
+  port: 443        # the port users connect to
+  timeout: 3       # seconds per attempt
+  attempts: 2      # a target fails only if every attempt fails
+
+# Nodes in planned maintenance: kept out of DNS, no node alerts. Remove an
+# entry and the node rejoins DNS on the next check if it is healthy.
+# Entries are node names, addresses or UUIDs as shown in the panel. Also
+# managed with /maintenance in Telegram and /api/maintenance.
+maintenance: []
+#  - node-3
+
+# Periodic Telegram report: uptime per node, outages, DNS changes.
+summary:
+  enabled: false
+  schedule: daily      # daily or weekly
+  time: "09:00"        # HH:MM in TIMEZONE from .env
+  weekday: monday      # for weekly
+
+# Automatically add panel nodes that are missing from this file.
+# - A panel host bound to specific nodes, whose address is under a domain below
+#   (e.g. s3.example1.com), gets those nodes added to that zone. The zone is
+#   created if it does not exist yet.
+# - default-zone (optional): any other node that is in no zone goes here.
+# Discovery only adds, never removes. This file is rewritten when it adds
+# something, which drops comments.
+auto-discovery:
+  enabled: false
+  # default-zone: s1.example1.com
+  ttl: 60          # for zones created by discovery
+  proxied: false
 
 # Domains and DNS zones to manage
 domains:
@@ -12,6 +53,7 @@ domains:
         ips:              # Node IPs to monitor
           - 1.2.3.4
           - 5.6.7.8
+        # probe-port: 8443  # optional: port for the TCP probe in this zone
 
   - domain: example2.com
     zones:

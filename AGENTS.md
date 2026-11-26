@@ -20,7 +20,20 @@ Both files are required at runtime. Copy from `.env.example` and `config.example
 `config.yml` supports `${VAR}` syntax (substituted at load time). This is implemented in `Config._substitute_env_vars()`.
 
 ### Runtime mutation
-`config.yml` is mutated at runtime by the HTTP API and by `Config.update_check_interval()`. The file is rewritten with `yaml.dump(..., sort_keys=False)`.
+`config.yml` is mutated at runtime by the HTTP API, by `Config.update_check_interval()`, and by
+auto-discovery (`src/discovery.py` → `Config.add_discovered_nodes()`, opt-in via `auto-discovery.enabled`).
+It is also mutated by `/maintenance` and `/api/maintenance` (`Config.add_maintenance()` / `remove_maintenance()`).
+The file is rewritten with `yaml.dump(..., sort_keys=False)`, which drops comments. Mutations edit
+`_raw_config` by index so `${VAR}` placeholders survive. `Config._save()` copies the old file to
+`<STATE_FILE dir>/config-backups/` first (10 kept), writes temp+rename, and falls back to an in-place
+write on `EBUSY` (Docker single-file bind mount). On any failure the in-memory config is reloaded from disk.
+`Config.reload()` validates and restores the previous config if the new file is invalid.
+
+## Health pipeline
+Per cycle (`MonitoringService._run_cycle`): panel status (`is_node_healthy`: connected, not disabled,
+`xray_version` set) → optional TCP probe (`src/probe.py`) → maintenance filter → flap protection
+(`fail-threshold` / `recover-threshold` streaks) → DNS + host sync, skipped while paused. Node alerts fire on
+*effective* flips only. `_previous_node_states` is the effective state and is what `StateStore` persists.
 
 ## Docker
 Primary deployment is Docker. Use `docker compose up -d` (image from DockerHub) or `docker compose -f docker-compose.dev.yml up -d` (local build with `src/` mounted read-only).
@@ -53,8 +66,15 @@ Do not go back to `signal.signal` + raising `SystemExit`: that surfaces the exce
 event loop rather than in the coroutine, so the `except` blocks never fire and shutdown
 waits out the full check interval.
 
+## Telegram commands
+`src/telegram/commands.py` (`CommandBot`, opt-in via `TELEGRAM_COMMANDS_ENABLED`) long-polls on the
+notifier's `Bot` with `handle_signals=False, close_bot_session=False`. It only answers `TELEGRAM_CHAT_ID`
+(optionally narrowed by `TELEGRAM_COMMAND_USERS`). `/reload` goes through the same async `reload_config()`
+as `SIGHUP`, which holds `MonitoringService.lock` so the config never changes under a running cycle.
+
 ## Persistent State
-`StateStore` (`src/state.py`) keeps node/host transition state in `STATE_FILE`
+`StateStore` (`src/state.py`) keeps node/host transition state, the DNS pause, the maintenance set seen
+last cycle, and the summary statistics (`src/summary.py`) in `STATE_FILE`
 (default `data/state.json`, needs a mounted volume). Writes are atomic (temp file + rename).
 A non-writable directory degrades to in-memory state with a warning — never a crash.
 
@@ -94,6 +114,10 @@ src/
   api/                 # FastAPI app with auth dependency
   telegram/            # Telegram notifier and event formatting
   cli.py               # Interactive CLI for show / validate / reload
+  discovery.py         # Auto-discovery of panel nodes into config.yml
+  probe.py             # Optional TCP reachability probe
+  summary.py           # Uptime statistics and the periodic summary
+  state.py             # Persistent state (state.json)
   i18n/                # Fluent runtime translations (en, ru)
   utils/               # logger, DNS helpers, time helpers
 ```

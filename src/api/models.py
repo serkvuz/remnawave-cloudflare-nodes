@@ -36,3 +36,12 @@ class DomainIn(BaseModel):
 
 class ConfigPatch(BaseModel):
     check_interval: Optional[int] = Field(default=None, ge=5)
+
+
+class PauseIn(BaseModel):
+    # e.g. "30m", "2h", "1d"; omit to pause until resumed
+    duration: Optional[str] = None
+
+
+class MaintenanceIn(BaseModel):
+    node: str = Field(min_length=1)  # node name, address or UUID

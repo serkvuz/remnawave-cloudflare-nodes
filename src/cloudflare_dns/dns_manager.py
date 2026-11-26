@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
 from .client import CloudflareClient
 from ..utils.dns import build_fqdn
@@ -21,6 +21,15 @@ class DNSManager:
         self.notifier = notifier
         self.notify_dns_changes = notify_dns_changes
         self.notify_errors = notify_errors
+        # Called with "added" / "removed" after each successful record change.
+        self.on_change: Optional[Callable[[str], None]] = None
+
+    def _changed(self, action: str) -> None:
+        if self.on_change:
+            try:
+                self.on_change(action)
+            except Exception as e:
+                self.logger.debug(f"DNS change hook failed: {e}")
 
     async def sync_dns_records(
             self,
@@ -79,6 +88,7 @@ class DNSManager:
                 zone_id=zone_id, name=full_domain, content=ip, record_type="A", ttl=ttl, proxied=proxied
             )
             self.logger.info(f"{full_domain}: added {ip}")
+            self._changed("added")
             if self.notifier and self.notify_dns_changes:
                 from ..telegram import DNSChange
 
@@ -101,6 +111,7 @@ class DNSManager:
         try:
             await self.client.delete_dns_record(zone_id, record["id"])
             self.logger.info(f"{full_domain}: removed {ip}")
+            self._changed("removed")
             if self.notifier and self.notify_dns_changes:
                 from ..telegram import DNSChange
 
