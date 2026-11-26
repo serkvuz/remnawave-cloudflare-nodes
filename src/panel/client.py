@@ -188,19 +188,16 @@ class RemnawaveClient:
         return node.is_disabled
 
     @staticmethod
-    def has_xray(node: NodeResponseDto) -> bool:
-        return bool(node.xray_version)
-
-    @staticmethod
     def is_node_healthy(node: NodeResponseDto) -> bool:
-        """Connected to the panel, not disabled, and running Xray.
+        """Return the panel's own health verdict for a node.
 
-        A node can stay connected while its Xray core is down (failed config
-        push, crashed core); the panel then reports no xrayVersion and the node
-        serves no users, so it must not stay in DNS.
+        `xrayVersion` is not used here: panels can report it as null for a
+        connected, active node (for example with remote Xray or a different
+        panel version), so requiring it removes healthy nodes from DNS. The
+        optional TCP probe is the reliable check for whether users can reach
+        the node.
         """
         return (
             RemnawaveClient.is_node_connected(node)
             and not RemnawaveClient.is_node_disabled(node)
-            and RemnawaveClient.has_xray(node)
         )

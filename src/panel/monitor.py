@@ -27,8 +27,6 @@ class NodeStatus:
             reasons.append("disconnected")
         if self.node.is_disabled:
             reasons.append("disabled")
-        if not self.node.xray_version:
-            reasons.append("no xray")
         if self.probe_failures:
             reasons.append("unreachable " + ", ".join(self.probe_failures))
         return reasons

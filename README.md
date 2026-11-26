@@ -377,7 +377,6 @@ python -m src
 2. **Health Evaluation** - Based on node status, determines which nodes are healthy:
     - Node must be connected (`is_connected = true`)
     - Node must not be disabled (`is_disabled = false`)
-    - Node must be running Xray (`xray_version` is not null)
     - With `probe.enabled`, every DNS IP of the node must accept a TCP connection on the probe port
 
 3. **Flap Protection** - A node leaves DNS only after `fail-threshold` unhealthy checks in a row, and returns

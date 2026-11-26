@@ -30,8 +30,8 @@ write on `EBUSY` (Docker single-file bind mount). On any failure the in-memory c
 `Config.reload()` validates and restores the previous config if the new file is invalid.
 
 ## Health pipeline
-Per cycle (`MonitoringService._run_cycle`): panel status (`is_node_healthy`: connected, not disabled,
-`xray_version` set) → optional TCP probe (`src/probe.py`) → maintenance filter → flap protection
+Per cycle (`MonitoringService._run_cycle`): panel status (`is_node_healthy`: connected, not disabled)
+→ optional TCP probe (`src/probe.py`) → maintenance filter → flap protection
 (`fail-threshold` / `recover-threshold` streaks) → DNS + host sync, skipped while paused. Node alerts fire on
 *effective* flips only. `_previous_node_states` is the effective state and is what `StateStore` persists.
 
